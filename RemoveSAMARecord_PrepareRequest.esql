@@ -1,0 +1,63 @@
+BROKER SCHEMA sa.com.saib.int.sislants
+PATH ibm.util.log4jv2;
+
+CREATE COMPUTE MODULE RemoveSAMARecord_PrepareRequest
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN		
+		--logging
+		DECLARE rc BOOLEAN;
+		CALL writeLog(ApplicationLabel || ':' || 'ANTS' || ':' || COALESCE(Environment.Variables.Request.Hdr.*:CorrelationId,'0')|| ':' || COALESCE(Environment.Variables.Request.Hdr.*:TransactionId,'0'), Environment.LoggerName, 'INFO','ANTS Remove SAMA Record Request Message: '|| InputRoot.*:XMLNSC) INTO rc;
+		
+		-- Save the ReqHeader to be used in the response message
+		SET Environment.Variables.ReqHeader = Environment.Variables.Request.Hdr;
+		SET Environment.Variables.Version = Environment.Variables.*:Request.*:Hdr.*:Version;
+		SET Environment.Variables.TransactionId = Environment.Variables.*:Request.*:Hdr.*:TransactionId;
+		SET Environment.Variables.RequesterId = Environment.Variables.*:Request.*:Hdr.*:RequesterId;
+		SET Environment.Variables.CorrelationId = Environment.Variables.*:Request.*:Hdr.*:CorrelationId;
+		SET Environment.Variables.ProfileLang = Environment.Variables.*:Request.*:Hdr.*:ProfileLang;
+		SET Environment.Variables.ServiceInterfaceName = Environment.Variables.*:Request.*:Hdr.*:ServiceInterfaceName;		
+		
+
+
+		DECLARE EnvErr REFERENCE TO Environment.Variables.Error;
+		DECLARE SOAPEnv REFERENCE TO Environment.Variables.Request.SOAPEnv;
+		DECLARE EnvHdr REFERENCE TO Environment.Variables.Request.Hdr;
+		DECLARE dataRef REFERENCE TO Environment.Variables.Log4jInput.Data[1];
+
+		DECLARE EnvVarRef REFERENCE TO Environment.Variables;
+		--Set HTTP Transport Header
+		DECLARE endPointURL CHARACTER SEMTemplateLib.getDPURLFromRegistryLookup(InputLocalEnvironment);
+		--Save the endpoint to be used with the Get request
+		SET Environment.Variables.endPointURL = endPointURL;
+
+		IF endPointURL IS NOT NULL AND LENGTH(endPointURL) > 0 THEN
+			SET OutputLocalEnvironment.Destination.HTTP.RequestURL = endPointURL;
+			SET OutputLocalEnvironment.Destination.HTTP.RequestLine.RequestURI = '/api/v1/currency/giftcards/balance_check';
+		ELSE
+			SET EnvErr.SOSCode = 'EVO.ESB.W'||ErrorSeriesPrefix||'02';
+			THROW USER EXCEPTION CATALOG 'BIPmsgs' MESSAGE 2951 VALUES('WSRR Lookup Failed while fetching URL for CheckGiftCardBalance');
+		END IF;
+
+		SET dataRef.LEVEL = 'INFO';
+		SET dataRef.TEXT = 'SOAP Request Sending to URL: '||OutputLocalEnvironment.Destination.SOAP.Request.Transport.HTTP.WebServiceURL;
+		CALL writeInlogFile(Environment.Variables) INTO rc;
+		SET dataRef.TEXT = 'ANTS Request Body: '||ConvertToChar(InputRoot.*:XMLNSC);
+		CALL writeInlogFile(Environment.Variables) INTO rc;
+
+		IF FIELDNAME(EnvVarRef.BAMInput) IS NULL THEN
+			CREATE FIELD EnvVarRef.BAMInput;
+		END IF;
+		DECLARE bamRef REFERENCE TO InputProperties;
+		CREATE LASTCHILD OF EnvVarRef.BAMInput AS bamRef NAME 'Data';
+		SET bamRef.TargetSystem = 'ANTS';
+		SET bamRef.MsgHeader = '';
+		SET bamRef.MsgBody = ConvertToChar(InputRoot.*:XMLNSC);
+		SET bamRef.Status = 'Success';
+		SET bamRef.Type = '0';
+
+		PROPAGATE TO TERMINAL 'out1' DELETE NONE;		
+
+
+		RETURN TRUE;
+	END;
+END MODULE;
